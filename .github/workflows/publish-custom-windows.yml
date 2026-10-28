@@ -1,0 +1,47 @@
+name: Publish verified Windows preview
+
+on:
+  workflow_run:
+    workflows: ["Packaging(Windows)"]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    # One-off release of the requested custom Windows build.
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.id == 40648003294 && github.event.workflow_run.head_sha == '5ce4d9ba45ef8b6a60eb115f8f30d80ae4f672ab' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packages from verified build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: gh run download "$RUN_ID" --repo "$REPO" --dir windows-packages
+
+      - name: Verify packages and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          find windows-packages -type f -print
+          while IFS= read -r -d '' checksum; do
+            (cd "$(dirname "$checksum")" && sha256sum -c "$(basename "$checksum")")
+          done < <(find windows-packages -type f -name '*.sha256sum' -print0)
+          test -n "$(find windows-packages -type f -name '*.msi' -print -quit)"
+          test -n "$(find windows-packages -type f -name '*.zip' -print -quit)"
+          mapfile -d '' -t assets < <(find windows-packages -type f \( -name '*.msi' -o -name '*.zip' -o -name '*.sha256sum' \) -print0)
+          test "${#assets[@]}" -ge 4
+          tag="custom-white-outline-2026-10-28"
+          if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --repo "$REPO" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" --repo "$REPO" --target "$SOURCE_SHA" --title "Flameshot — Custom White Background Outline (Windows)" --notes "Custom Windows build from commit $SOURCE_SHA. Includes an MSI installer, a portable ZIP, and SHA-256 checksum files. This is a custom build, not an official Flameshot release." --prerelease
+          fi
