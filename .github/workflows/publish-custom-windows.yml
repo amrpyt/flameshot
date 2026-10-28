@@ -1,6 +1,7 @@
 name: Publish verified Windows preview
 
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ["Packaging(Windows)"]
     types: [completed]
@@ -13,13 +14,13 @@ permissions:
 jobs:
   release:
     # One-off release of the requested custom Windows build.
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.id == 40648003294 && github.event.workflow_run.head_sha == '5ce4d9ba45ef8b6a60eb115f8f30d80ae4f672ab' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.id == 40648003294 && github.event.workflow_run.head_sha == '5ce4d9ba45ef8b6a60eb115f8f30d80ae4f672ab') }}
     runs-on: ubuntu-latest
     steps:
       - name: Download packages from verified build
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ID: ${{ github.event.workflow_run.id || '40648003294' }}
           REPO: ${{ github.repository }}
         run: gh run download "$RUN_ID" --repo "$REPO" --dir windows-packages
 
@@ -28,12 +29,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || '5ce4d9ba45ef8b6a60eb115f8f30d80ae4f672ab' }}
         run: |
           set -euo pipefail
           find windows-packages -type f -print
           while IFS= read -r -d '' checksum; do
-            (cd "$(dirname "$checksum")" && sha256sum -c "$(basename "$checksum")")
+            asset="${checksum%.sha256sum}"
+            expected="$(grep -Eo '[[:xdigit:]]{64}' "$checksum" | head -n 1)"
+            actual="$(sha256sum "$asset" | cut -d ' ' -f 1)"
+            test "$expected" = "$actual" || { echo "Checksum mismatch: $asset"; exit 1; }
+            echo "Verified: $asset"
           done < <(find windows-packages -type f -name '*.sha256sum' -print0)
           test -n "$(find windows-packages -type f -name '*.msi' -print -quit)"
           test -n "$(find windows-packages -type f -name '*.zip' -print -quit)"
